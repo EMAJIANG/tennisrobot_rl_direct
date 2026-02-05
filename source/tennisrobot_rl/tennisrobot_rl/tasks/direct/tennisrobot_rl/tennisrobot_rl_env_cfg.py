@@ -53,6 +53,10 @@ class TennisrobotRlDirectEnvCfg(DirectRLEnvCfg):
     action_space = 4
     observation_space = 7
     state_space = 0
+    use_ball_vel_estimator = True
+    ball_vel_use_dt_input = True
+    ball_vel_history_len = 10
+    ball_vel_ckpt_path = "/home/robotennis2025/tennis_robot_iros/tennisrobot_rl/checkpoints_ball_vel/ball_vel_mlp_hist8_dt/ckpt_final.pt"  # 改成你的ckpt路径
     # reset
     ball_speed_x_range = (-0.5, 0.5)
     ball_speed_y_range = (-8.0, -6.0)
@@ -81,7 +85,7 @@ class TennisrobotRlDirectEnvCfg(DirectRLEnvCfg):
 
     joint_torque_reward_scale = -2.5e-10
     joint_accel_reward_scale = -2.5e-7
-    action_rate_reward_scale = -1e-4
+    action_rate_reward_scale = -1
     # simulation
     sim: SimulationCfg = SimulationCfg(
         dt=1 / 100,

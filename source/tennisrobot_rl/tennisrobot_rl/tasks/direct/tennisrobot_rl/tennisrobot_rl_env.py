@@ -22,6 +22,7 @@ from isaaclab.sensors import ContactSensor
 from isaaclab.markers import VisualizationMarkers
 from isaaclab.utils.noise import uniform_noise
 from isaaclab.utils.noise import UniformNoiseCfg as Unoise
+from tennisrobot_rl.velocity_estimator.modules.ball_vel_estimator import BallVelEstimator, BallVelEstimatorCfg
 from isaaclab.assets import (
     Articulation,
     ArticulationCfg,
@@ -31,8 +32,7 @@ from isaaclab.assets import (
     RigidObjectCollection,
     RigidObjectCollectionCfg,
 )
-from .tennisrobot_rl_direct_env_cfg import TennisrobotRlDirectEnvCfg
-from .kf import BatchedKalmanFilter
+from .tennisrobot_rl_env_cfg import TennisrobotRlDirectEnvCfg
 
 class TennisrobotRlDirectEnv(DirectRLEnv):
     cfg: TennisrobotRlDirectEnvCfg
@@ -71,6 +71,15 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
         self.x_algin_dist = torch.zeros(self.num_envs, device=self.device)
         self.spatial_ball_to_racket = torch.zeros((self.num_envs, 3), device=self.device)
 
+        self.ball_vel_estimator = None
+        if self.cfg.use_ball_vel_estimator:
+            est_cfg = BallVelEstimatorCfg(
+                ckpt_path=self.cfg.ball_vel_ckpt_path,
+                device=str(self.device),
+                history_len=self.cfg.ball_vel_history_len,     # 8
+                use_dt_input=self.cfg.ball_vel_use_dt_input,   # True
+            )
+            self.ball_vel_estimator = BallVelEstimator(est_cfg, num_envs=self.num_envs)
         # debug
         self.current_obs = []
         self.current_rew = []
@@ -374,6 +383,8 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
         # self._robot.reset(env_ids)
 
         # 重置 extras 字典中对应环境的值
+        if self.ball_vel_estimator is not None:
+            self.ball_vel_estimator.reset(env_ids)
         if "episode" in self.extras:
             # 遍历 "episode" 字典中的所有值（这些值就是我们的奖励张量）
             for value_tensor in self.extras["episode"].values():
@@ -477,6 +488,12 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
         self.smallest_dis = torch.minimum(
             self.smallest_dis, distance
         )
+        if self.ball_vel_estimator is not None:
+            # pos建议用 env-local：ball.data.root_pos_w - env.scene.env_origins
+            self.ball_vel_hat = self.ball_vel_estimator.step(self.ball_pos, dt=float(self.dt), reset_ids=None)
+        else:
+            self.ball_vel_hat = self.ball_linvel
+
          # debug info
         self.current_obs.append(
             {
@@ -503,6 +520,8 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
         policy_joint_vel = uniform_noise(self._robot.data.joint_vel, cfg=Unoise(n_min=-0.05, n_max=0.05))
         policy_ball_pos = uniform_noise(self.ball_pos, cfg=Unoise(n_min=-0.05, n_max=0.05))
         policy_ball_lin_vel = uniform_noise(self.ball_linvel, cfg=Unoise(n_min=-0.2, n_max=0.2))
+        if self.cfg.use_ball_vel_estimator:
+            policy_ball_lin_vel = self.ball_vel_hat
         policy_obs = torch.cat(
             (
              policy_joint_pos,

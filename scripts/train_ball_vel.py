@@ -30,6 +30,8 @@ from tennisrobot_rl.velocity_estimator.modules.normalizer import RunningMeanStd,
 from tennisrobot_rl.velocity_estimator.data.replay_buffer import SupervisedReplayBuffer, ReplayBufferConfig
 from tennisrobot_rl.velocity_estimator.envs.observation_buffer import PositionHistoryBuffer, PositionHistoryConfig
 
+from isaaclab.utils.noise import uniform_noise
+from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
 # -------------------------
 # Config
@@ -45,7 +47,7 @@ class TrainConfig:
     dt: float = 1.0 / 120.0
 
     # ---- history feature ----
-    history_len: int = 8          # <<< 8帧历史
+    history_len: int = 10          # <<< 8帧历史
     use_dt_input: bool = True     # append dt as last feature
 
     # data/buffer
@@ -97,6 +99,7 @@ def get_ball_pos_vel(env: TennisrobotRlDirectEnv) -> Tuple[torch.Tensor, torch.T
     ball = env.scene.rigid_objects["ball"]
     # pos in env-local frame to avoid env_origin offsets across envs
     pos_w = (ball.data.root_pos_w - env.scene.env_origins)  # (N,3)
+    pos_w = uniform_noise(pos_w, cfg=Unoise(n_min=-0.05, n_max=0.05))
     vel_w = ball.data.root_lin_vel_w                        # (N,3)
     return pos_w, vel_w
 
