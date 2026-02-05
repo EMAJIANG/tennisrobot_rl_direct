@@ -1,12 +1,13 @@
-# scripts/train_ball_vel.py
+# tennisrobot_rl/velocity_estimator/scripts/train_ball_vel.py
 from __future__ import annotations
 
 import os
 import os, sys
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJ_DIR = os.path.abspath(os.path.join(THIS_DIR, ".."))  # VelocityEstimator/
+PROJ_DIR = os.path.abspath(os.path.join(THIS_DIR, ".."))  # velocity_estimator/
 if PROJ_DIR not in sys.path:
     sys.path.insert(0, PROJ_DIR)
+
 import time
 from dataclasses import dataclass, asdict
 from typing import Optional, Tuple
@@ -20,7 +21,6 @@ from isaaclab.app import AppLauncher
 app_launcher = AppLauncher(headless=True)
 simulation_app = app_launcher.app
 
-
 # ============= your env =============
 from tennisrobot_rl.tasks.direct.tennisrobot_rl.tennisrobot_rl_env import TennisrobotRlDirectEnv
 from tennisrobot_rl.tasks.direct.tennisrobot_rl.tennisrobot_rl_env_cfg import TennisrobotRlDirectEnvCfg
@@ -31,7 +31,6 @@ from tennisrobot_rl.velocity_estimator.data.replay_buffer import SupervisedRepla
 from tennisrobot_rl.velocity_estimator.envs.observation_buffer import PositionHistoryBuffer, PositionHistoryConfig
 
 
-
 # -------------------------
 # Config
 # -------------------------
@@ -40,10 +39,14 @@ class TrainConfig:
     # sim/env
     seed: int = 0
     device: str = "cuda"
-    num_envs: int = 1024
+    num_envs: int = 1
 
     # NOTE: dt will be overridden by env.dt after env is created.
     dt: float = 1.0 / 120.0
+
+    # ---- history feature ----
+    history_len: int = 8          # <<< 8帧历史
+    use_dt_input: bool = True     # append dt as last feature
 
     # data/buffer
     capacity: int = 2_000_000
@@ -67,43 +70,38 @@ class TrainConfig:
     log_every: int = 200
     ckpt_every: int = 20_000
     out_dir: str = "checkpoints_ball_vel"
-    run_name: str = "ball_vel_mlp_dt"
+    run_name: str = "ball_vel_mlp_hist8_dt"
 
     # normalizer
     norm_clip: float = 10.0
     norm_update_every: int = 1  # update RMS every N sim steps
 
 
+def compute_x_dim(history_len: int, use_dt_input: bool) -> int:
+    return 3 * int(history_len) + (1 if use_dt_input else 0)
+
+
 # -------------------------
-# IsaacLab integration (fully adapted to your env)
+# IsaacLab integration
 # -------------------------
 def make_env(cfg: TrainConfig) -> TennisrobotRlDirectEnv:
-    """Build your DirectRLEnv and sync cfg.dt from env.dt."""
     env_cfg = TennisrobotRlDirectEnvCfg()
-
-    # override num_envs
     env_cfg.scene.num_envs = int(cfg.num_envs)
-
-    # create env (headless by default; render_mode=None)
     env = TennisrobotRlDirectEnv(cfg=env_cfg, render_mode=None)
-
-    # dt for learning input should be the *control step dt* used by env.step
     cfg.dt = float(env.dt)
     return env
 
 
 @torch.no_grad()
 def get_ball_pos_vel(env: TennisrobotRlDirectEnv) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Get ball ground-truth state in world frame."""
     ball = env.scene.rigid_objects["ball"]
-    pos_w = ball.data.root_pos_w         # (N,3)
-    vel_w = ball.data.root_lin_vel_w     # (N,3)
+    # pos in env-local frame to avoid env_origin offsets across envs
+    pos_w = (ball.data.root_pos_w - env.scene.env_origins)  # (N,3)
+    vel_w = ball.data.root_lin_vel_w                        # (N,3)
     return pos_w, vel_w
 
 
 def get_reset_ids(terminated, truncated, device: torch.device) -> torch.Tensor:
-    """Convert terminated/truncated to env_ids on correct device."""
-    # Most IsaacLab returns torch.BoolTensor on device already; handle robustly.
     if terminated is None and truncated is None:
         return torch.empty((0,), device=device, dtype=torch.long)
 
@@ -115,7 +113,6 @@ def get_reset_ids(terminated, truncated, device: torch.device) -> torch.Tensor:
             return torch.empty((0,), device=device, dtype=torch.long)
         return torch.nonzero(done, as_tuple=False).squeeze(-1).to(device=device, dtype=torch.long)
 
-    # fallback: convert python/numpy to torch
     t = torch.as_tensor(terminated, dtype=torch.bool, device=device)
     if truncated is not None:
         t = t | torch.as_tensor(truncated, dtype=torch.bool, device=device)
@@ -144,15 +141,16 @@ def main(train_cfg: TrainConfig) -> None:
 
     # --- build env ---
     env = make_env(train_cfg)
-
-    # (optional sanity check)
     if int(env.num_envs) != int(train_cfg.num_envs):
         raise RuntimeError(f"env.num_envs={env.num_envs} != cfg.num_envs={train_cfg.num_envs}")
 
+    # --- feature dims ---
+    x_dim = compute_x_dim(train_cfg.history_len, train_cfg.use_dt_input)
+
     # --- model ---
     mlp_cfg = MLPConfig(
-        in_dim=10,  # 9 pos + 1 dt
-        out_dim=3,  # v vector
+        in_dim=x_dim,
+        out_dim=3,
         hidden=tuple(train_cfg.hidden),
         activation="relu",
         use_layernorm=train_cfg.use_layernorm,
@@ -163,7 +161,7 @@ def main(train_cfg: TrainConfig) -> None:
 
     # --- normalizer (input x) ---
     rms = RunningMeanStd(
-        dim=10,
+        dim=x_dim,
         device=device,
         dtype=torch.float32,
         cfg=NormalizerConfig(eps=1e-8, clip=train_cfg.norm_clip),
@@ -173,7 +171,7 @@ def main(train_cfg: TrainConfig) -> None:
     rb = SupervisedReplayBuffer(
         ReplayBufferConfig(
             capacity=train_cfg.capacity,
-            x_dim=10,
+            x_dim=x_dim,
             y_dim=3,
             device=str(device),
             dtype=torch.float32,
@@ -183,10 +181,10 @@ def main(train_cfg: TrainConfig) -> None:
     # --- position history buffer ---
     hist = PositionHistoryBuffer(
         num_envs=train_cfg.num_envs,
-        dt=train_cfg.dt,  # <-- from env.dt (sim.dt * decimation)
+        dt=train_cfg.dt,
         device=device,
         dtype=torch.float32,
-        cfg=PositionHistoryConfig(hist_len=3, use_dt_input=True, x_dim=10),
+        cfg=PositionHistoryConfig(hist_len=train_cfg.history_len, use_dt_input=train_cfg.use_dt_input, x_dim=x_dim),
     )
 
     # --- optimizer ---
@@ -211,8 +209,6 @@ def main(train_cfg: TrainConfig) -> None:
     for step in range(1, train_cfg.total_steps + 1):
         # 1) step sim
         out = env.step(action)
-
-        # IsaacLab DirectRLEnv usually returns (obs, rew, terminated, truncated, info)
         if not (isinstance(out, tuple) and len(out) >= 5):
             raise RuntimeError(
                 "env.step(action) must return at least (obs, rew, terminated, truncated, info). "
@@ -225,7 +221,7 @@ def main(train_cfg: TrainConfig) -> None:
 
         # 3) update history and build x
         hist.push(pos_w)
-        x_all, mask = hist.get_features()  # (N,10), (N,)
+        x_all, mask = hist.get_features()  # (N, x_dim), (N,)
 
         if mask.any():
             x = x_all[mask]
@@ -268,6 +264,7 @@ def main(train_cfg: TrainConfig) -> None:
             sps = step / max(dt_s, 1e-6)
             print(
                 f"[step {step:>8d}] "
+                f"K={train_cfg.history_len} x_dim={x_dim} "
                 f"dt={train_cfg.dt:.6f} "
                 f"buf={len(rb):>7d} updates={num_updates:>7d} "
                 f"loss_ema={loss_ema if loss_ema is not None else float('nan'):.6f} "

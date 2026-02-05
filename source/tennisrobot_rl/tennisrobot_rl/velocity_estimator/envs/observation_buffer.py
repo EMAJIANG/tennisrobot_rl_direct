@@ -1,26 +1,32 @@
-# envs/observation_buffer.py
+# tennisrobot_rl/velocity_estimator/envs/observation_buffer.py
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Tuple
 
 import torch
 
 
 @dataclass
 class PositionHistoryConfig:
-    hist_len: int = 3          # we need [t-2, t-1, t]
-    use_dt_input: bool = True  # append dt as the last feature
-    x_dim: int = 10            # 3*3 + 1
+    # number of historical frames to keep: K
+    hist_len: int = 3
+    # whether to append dt as the last feature
+    use_dt_input: bool = True
+    # if set (>0), validate against computed dim; if 0, auto compute
+    x_dim: int = 0
 
 
 class PositionHistoryBuffer:
-    """Maintain per-env position history of length hist_len.
+    """Per-env position history buffer for building supervised features.
 
-    For our task:
-      - hist_len = 3
-      - pos_hist: (N, 3, 3) time-major [t-2, t-1, t]
-      - When not enough frames collected after reset, mask is False.
+    Stores:
+      pos_hist: (N, K, 3) with oldest->newest along dim=1
+      count:    (N,) number of frames seen since last reset (clamped to K)
+
+    Features:
+      x = flatten(pos_hist) -> (N, 3K)
+      if use_dt_input: append dt -> (N, 3K+1)
     """
 
     def __init__(
@@ -31,74 +37,64 @@ class PositionHistoryBuffer:
         dtype: torch.dtype = torch.float32,
         cfg: PositionHistoryConfig = PositionHistoryConfig(),
     ):
-        if cfg.hist_len != 3:
-            raise ValueError("This buffer is designed for hist_len=3 (t-2,t-1,t).")
-        if cfg.use_dt_input and cfg.x_dim != 10:
-            raise ValueError("If use_dt_input=True, x_dim must be 10.")
-        if (not cfg.use_dt_input) and cfg.x_dim != 9:
-            raise ValueError("If use_dt_input=False, x_dim must be 9.")
+        if cfg.hist_len <= 0:
+            raise ValueError(f"hist_len must be > 0, got {cfg.hist_len}")
 
         self.cfg = cfg
         self.num_envs = int(num_envs)
-        self.dt_value = float(dt)
-
         self.device = torch.device(device)
         self.dtype = dtype
 
-        self.pos_hist = torch.zeros((self.num_envs, cfg.hist_len, 3), device=self.device, dtype=self.dtype)
-        # how many frames already pushed since last reset (0..hist_len)
-        self._count = torch.zeros((self.num_envs,), device=self.device, dtype=torch.int32)
-
-        # dt tensor cached
+        self.dt_value = float(dt)
         self._dt = torch.tensor(self.dt_value, device=self.device, dtype=self.dtype)
+
+        self.K = int(cfg.hist_len)
+        self.x_dim = 3 * self.K + (1 if cfg.use_dt_input else 0)
+        if cfg.x_dim and int(cfg.x_dim) != self.x_dim:
+            raise ValueError(
+                f"x_dim mismatch: cfg.x_dim={cfg.x_dim} but computed={self.x_dim} "
+                f"(hist_len={cfg.hist_len}, use_dt_input={cfg.use_dt_input})"
+            )
+
+        self.pos_hist = torch.zeros((self.num_envs, self.K, 3), device=self.device, dtype=self.dtype)
+        self._count = torch.zeros((self.num_envs,), device=self.device, dtype=torch.int32)
 
     @property
     def dt(self) -> torch.Tensor:
         return self._dt
 
     def reset(self, env_ids: torch.Tensor) -> None:
-        """Reset history for env_ids. env_ids: (k,) long/int."""
+        """Reset history for given env_ids."""
         if env_ids.numel() == 0:
             return
-        env_ids = env_ids.to(device=self.device)
+        env_ids = env_ids.to(device=self.device, dtype=torch.long)
         self.pos_hist[env_ids] = 0.0
         self._count[env_ids] = 0
 
     def push(self, pos_t: torch.Tensor) -> None:
-        """Push current position for all envs.
-
-        Args:
-            pos_t: (N,3) in world frame
-        """
+        """Push current position for all envs. pos_t: (N,3)."""
         if pos_t.ndim != 2 or pos_t.shape != (self.num_envs, 3):
-            raise ValueError(f"Expected pos_t shape {(self.num_envs,3)}, got {tuple(pos_t.shape)}")
+            raise ValueError(f"pos_t must be shape ({self.num_envs}, 3), got {tuple(pos_t.shape)}")
 
         pos_t = pos_t.to(device=self.device, dtype=self.dtype, non_blocking=True)
 
-        # roll time axis left: [t-2,t-1,t] -> [t-1,t,t] then write last as pos_t
+        # roll left, newest goes to last
         self.pos_hist = torch.roll(self.pos_hist, shifts=-1, dims=1)
         self.pos_hist[:, -1, :].copy_(pos_t)
 
-        # update counts up to hist_len
-        self._count = torch.clamp(self._count + 1, max=self.cfg.hist_len)
+        self._count = torch.clamp(self._count + 1, max=self.K)
 
     def ready_mask(self) -> torch.Tensor:
-        """Return (N,) bool mask indicating whether we have full history (>=hist_len)."""
-        return self._count >= self.cfg.hist_len
+        return self._count >= self.K
 
     def get_features(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Return:
-        - x: (N, x_dim)
-        - mask: (N,) bool
-        """
-        # flatten positions
-        x_pos = self.pos_hist.reshape(self.num_envs, 9)
+        """Return x: (N, x_dim), mask: (N,) bool."""
+        x_pos = self.pos_hist.reshape(self.num_envs, 3 * self.K)  # (N, 3K)
 
         if self.cfg.use_dt_input:
-            dt_col = self._dt.view(1, 1).expand(self.num_envs, 1)
-            x = torch.cat([x_pos, dt_col], dim=1)
+            dt_col = self._dt.view(1, 1).expand(self.num_envs, 1)  # (N,1)
+            x = torch.cat([x_pos, dt_col], dim=1)                  # (N, 3K+1)
         else:
             x = x_pos
 
-        mask = self.ready_mask()
-        return x, mask
+        return x, self.ready_mask()

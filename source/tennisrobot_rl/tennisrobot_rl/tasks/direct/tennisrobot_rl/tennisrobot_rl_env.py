@@ -20,6 +20,8 @@ from isaaclab.sim.spawners import materials
 from isaaclab.utils.math import quat_apply
 from isaaclab.sensors import ContactSensor
 from isaaclab.markers import VisualizationMarkers
+from isaaclab.utils.noise import uniform_noise
+from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 from isaaclab.assets import (
     Articulation,
     ArticulationCfg,
@@ -29,7 +31,8 @@ from isaaclab.assets import (
     RigidObjectCollection,
     RigidObjectCollectionCfg,
 )
-from .tennisrobot_rl_env_cfg import TennisrobotRlDirectEnvCfg
+from .tennisrobot_rl_direct_env_cfg import TennisrobotRlDirectEnvCfg
+from .kf import BatchedKalmanFilter
 
 class TennisrobotRlDirectEnv(DirectRLEnv):
     cfg: TennisrobotRlDirectEnvCfg
@@ -496,16 +499,23 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
         self._previous_actions = self.actions.clone()
         self.get_paddle_touch_point()
         critic_ball_racket_pos_error = torch.norm(self.ball_global_pos - self.paddle_touch_point, dim=1).clamp_min(1e-12).unsqueeze(-1)
+        policy_joint_pos = uniform_noise(self._robot.data.joint_pos, cfg=Unoise(n_min=-0.01, n_max=0.01))
+        policy_joint_vel = uniform_noise(self._robot.data.joint_vel, cfg=Unoise(n_min=-0.05, n_max=0.05))
+        policy_ball_pos = uniform_noise(self.ball_pos, cfg=Unoise(n_min=-0.05, n_max=0.05))
+        policy_ball_lin_vel = uniform_noise(self.ball_linvel, cfg=Unoise(n_min=-0.2, n_max=0.2))
         policy_obs = torch.cat(
-            (self._robot.data.joint_pos,
-             self._robot.data.joint_vel, 
-             self.ball_pos, 
-             self.ball_linvel),
+            (
+             policy_joint_pos,
+             policy_joint_vel, 
+             policy_ball_pos, 
+             policy_ball_lin_vel
+             ),
             dim=-1,
         )
 
         critic_obs = torch.cat(
-            (self._robot.data.joint_pos,
+            (
+             self._robot.data.joint_pos,
              self._robot.data.joint_vel, 
              self.ball_pos, 
              self.ball_linvel,
