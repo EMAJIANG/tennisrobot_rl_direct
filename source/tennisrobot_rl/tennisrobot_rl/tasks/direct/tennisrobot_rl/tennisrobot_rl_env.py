@@ -29,8 +29,7 @@ from isaaclab.assets import (
     RigidObjectCollection,
     RigidObjectCollectionCfg,
 )
-from .tennisrobot_rl_direct_env_cfg import TennisrobotRlDirectEnvCfg
-from .kf import BatchedKalmanFilter
+from .tennisrobot_rl_env_cfg import TennisrobotRlDirectEnvCfg
 
 class TennisrobotRlDirectEnv(DirectRLEnv):
     cfg: TennisrobotRlDirectEnvCfg
