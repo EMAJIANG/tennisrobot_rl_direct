@@ -376,7 +376,7 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
         # self._robot.reset(env_ids)
 
         # 重置 extras 字典中对应环境的值
-        if self.ball_vel_estimator is not None:
+        if self.cfg.use_ball_vel_estimator:
             self.ball_vel_estimator.reset(env_ids)
         if "episode" in self.extras:
             # 遍历 "episode" 字典中的所有值（这些值就是我们的奖励张量）
@@ -481,7 +481,7 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
         self.smallest_dis = torch.minimum(
             self.smallest_dis, distance
         )
-        if self.ball_vel_estimator is not None:
+        if self.cfg.use_ball_vel_estimator:
             # pos建议用 env-local：ball.data.root_pos_w - env.scene.env_origins
             self.ball_vel_hat, self.ball_vel_loss = self.ball_vel_estimator.step(self.ball_pos, dt=float(self.dt), reset_ids=None)
         else:
@@ -521,7 +521,7 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
              policy_joint_pos,
              policy_joint_vel, 
              policy_ball_pos, 
-             policy_ball_lin_vel
+             self.ball_linvel
              ),
             dim=-1,
         )

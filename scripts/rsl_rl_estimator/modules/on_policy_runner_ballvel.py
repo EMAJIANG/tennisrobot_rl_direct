@@ -350,10 +350,19 @@ class OnPolicyRunnerBallVel(OnPolicyRunner):
 
         torch.save(ckpt, path)
 
-        policy_path = os.path.join(os.path.dirname(path), "policy_jit.pt")
-        example = torch.zeros(1, self.alg.policy.num_actor_obs, device=self.device)
-        jit_policy = torch.jit.trace(self.alg.policy.actor, example)
-        jit_policy.save(policy_path)
+        deploy = {
+            "actor_state_dict": self.alg.policy.actor.state_dict(),   # 部署只要 actor
+            "estimator_state_dict": self.alg.estimator.state_dict(),
+            "obs_normalizer": self.obs_normalizer.state_dict(),
+            "privileged_obs_normalizer": self.privileged_obs_normalizer.state_dict(),  # 部署如果不用 critic 可不加载
+            "meta": {
+                "num_prop": self.alg.num_prop,
+                "ball_vel_policy_offset": self.alg.ball_vel_policy_offset,
+                "ball_vel_critic_offset": self.alg.ball_vel_critic_offset,
+                "train_with_estimated_ball_vel": self.alg.train_with_estimated_ball_vel,
+            },
+        }
+        torch.save(deploy, os.path.join(os.path.dirname(path), "deployment.pt"))
 
 
     def load(self, path: str, load_optimizer: bool = True):

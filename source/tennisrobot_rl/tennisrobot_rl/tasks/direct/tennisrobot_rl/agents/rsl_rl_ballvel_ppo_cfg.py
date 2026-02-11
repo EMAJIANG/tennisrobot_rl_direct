@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from isaaclab.utils import configclass
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
+from tennisrobot_rl.tasks.direct.tennisrobot_rl.tennisrobot_rl_env_cfg import TennisrobotRlDirectEnvCfg
 
 
 
@@ -61,7 +62,11 @@ class TennisRslRlPolicyCfg:
 class TennisRslRlOnPolicyRunnerCfg(RslRlOnPolicyRunnerCfg):
     # runner settings
     device: str = "cuda:0"
-    experiment_name = "tennisrobot_rl_with_ballvel_estimator"
+    env_cfg: TennisrobotRlDirectEnvCfg = TennisrobotRlDirectEnvCfg()
+    if env_cfg.use_ball_vel_estimator:
+     experiment_name = "tennisrobot_rl_with_ballvel_estimator"
+    else:
+     experiment_name = "tennisrobot_rl_without_ballvel_estimator"
     empirical_normalization = False
 
     num_steps_per_env: int = 24

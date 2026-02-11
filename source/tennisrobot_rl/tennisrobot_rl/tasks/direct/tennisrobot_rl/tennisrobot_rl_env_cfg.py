@@ -53,7 +53,7 @@ class TennisrobotRlDirectEnvCfg(DirectRLEnvCfg):
     action_space = 4
     observation_space = 7
     state_space = 0
-    use_ball_vel_estimator = True
+    use_ball_vel_estimator = False
     ball_vel_use_dt_input = True
     ball_vel_history_len = 10
     # reset
