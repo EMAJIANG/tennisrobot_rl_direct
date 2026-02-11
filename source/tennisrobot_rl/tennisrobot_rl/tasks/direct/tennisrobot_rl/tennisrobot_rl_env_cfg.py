@@ -56,7 +56,6 @@ class TennisrobotRlDirectEnvCfg(DirectRLEnvCfg):
     use_ball_vel_estimator = True
     ball_vel_use_dt_input = True
     ball_vel_history_len = 10
-    ball_vel_ckpt_path = "/home/robotennis2025/tennis_robot_iros/tennisrobot_rl/checkpoints_ball_vel/ball_vel_mlp_hist8_dt/ckpt_final.pt"  # 改成你的ckpt路径
     # reset
     ball_speed_x_range = (-0.5, 0.5)
     ball_speed_y_range = (-8.0, -6.0)

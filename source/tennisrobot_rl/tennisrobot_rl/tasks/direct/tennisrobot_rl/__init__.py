@@ -21,3 +21,13 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PPORunnerCfg",
     },
 )
+
+gym.register(
+    id="Isaac-Tennisrobot-Rl-Direct-BallVel-v0",
+    entry_point=f"{__name__}.tennisrobot_rl_env:TennisrobotRlDirectEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.tennisrobot_rl_env_cfg:TennisrobotRlDirectEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ballvel_ppo_cfg:TennisRslRlOnPolicyRunnerCfg",
+    },
+)
