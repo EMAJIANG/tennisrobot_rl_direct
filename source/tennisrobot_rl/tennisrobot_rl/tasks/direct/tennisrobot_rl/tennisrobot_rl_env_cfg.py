@@ -29,7 +29,7 @@ from isaaclab.assets import (
     RigidObjectCollection,
     RigidObjectCollectionCfg,
 )
-from isaaclab.actuators.actuator_cfg import ImplicitActuatorCfg
+from isaaclab.actuators.actuator_cfg import ImplicitActuatorCfg, DelayedPDActuatorCfg
 import isaaclab.sim as sim_utils
 from isaaclab.sim.spawners import materials
 import os
@@ -55,12 +55,13 @@ class TennisrobotRlDirectEnvCfg(DirectRLEnvCfg):
     state_space = 0
     use_ball_vel_estimator = False
     ball_vel_use_dt_input = True
+    debug_visualization = False
     ball_vel_history_len = 10
     # reset
-    ball_speed_x_range = (-0.5, 0.5)
+    ball_speed_x_range = (-0.1, 0.1)
     ball_speed_y_range = (-8.0, -6.0)
     ball_speed_z_range = (0.5, 0.8)
-    ball_pos_x_range = (0.3, 1.0)
+    ball_pos_x_range = (-1.5, 1.5)
     ball_pos_y_range = (0.0, 0.3)
     ball_pos_z_range = (-0.1, 0.1)
 
@@ -75,12 +76,13 @@ class TennisrobotRlDirectEnvCfg(DirectRLEnvCfg):
     contact_threshold=0.06
 
     rew_scale_y = 0.5
-    rew_scale_contact =1
+    rew_scale_contact = 3.0
     rew_scale_court_success = 5
     rew_scale_court_fail = 2
     rew_scale_ball_outside = 3.5
     rew_scale_ball_pos = 2
-    rew_scale_rew_x_align = 1.0
+    rew_scale_rew_x_align = 0.5
+    rew_scale_rew_z_align = 0.5
 
     joint_torque_reward_scale = -2.5e-10
     joint_accel_reward_scale = -2.5e-7
@@ -119,7 +121,7 @@ class TennisrobotRlDirectEnvCfg(DirectRLEnvCfg):
             spawn=sim_utils.UsdFileCfg(
         usd_path=os.path.join(usd_dir_path, robot_usd),  # TR robot USD
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
-            disable_gravity=False,
+            disable_gravity=True,
             max_depenetration_velocity=5.0,
         ),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
@@ -137,36 +139,44 @@ class TennisrobotRlDirectEnvCfg(DirectRLEnvCfg):
                 "Z_Pris_V": 0.3,
                 "Racket_Pev": -torch.pi/3
             },
-            pos=(0.0, 0.0, 0.0),
+            pos=(0.0, 0.0, 0.1),
         ),
         actuators={
-            "X_Pris": ImplicitActuatorCfg(
+            "X_Pris": DelayedPDActuatorCfg(
                 joint_names_expr=["X_Pris"],  # Corrected joint names
                 velocity_limit_sim=3.0,
                 # effort_limit_sim=3402823466385288598117041834845,
                 stiffness=300.0,
                 damping=10.0,
+                min_delay = 0,
+                max_delay = 3
             ),
-            "Z_Pris_H": ImplicitActuatorCfg(
+            "Z_Pris_H": DelayedPDActuatorCfg(
                 joint_names_expr=["Z_Pris_H"],  # Corrected joint names
                 velocity_limit_sim=3.0,
                 # effort_limit_sim=3402823466385288598117041834845,
                 stiffness=30.0,
                 damping=20.0,
+                min_delay = 0,
+                max_delay = 3
             ),
-            "Z_Pris_V": ImplicitActuatorCfg(
+            "Z_Pris_V": DelayedPDActuatorCfg(
                 joint_names_expr=["Z_Pris_V"],  # Corrected joint names
                 velocity_limit_sim=3.0,
                 # effort_limit_sim=3402823466385288598117041834845,
                 stiffness=5000.0,
                 damping=100.0,
+                min_delay = 0,
+                max_delay = 3
             ),
-            "Racket_Pev": ImplicitActuatorCfg(
+            "Racket_Pev": DelayedPDActuatorCfg(
                 joint_names_expr=["Racket_Pev"],  # Corrected joint names
                 velocity_limit_sim=1145.0,  # Adjusted for the racket's movement
                 effort_limit_sim=314,
                 stiffness=10000000.0,
                 damping=0.0,
+                min_delay = 0,
+                max_delay = 3
             ),
         },
     )
@@ -204,33 +214,41 @@ class TennisrobotRlDirectEnvCfg(DirectRLEnvCfg):
                 pos=(0.0, 0.0, 0.0),
             ),
             actuators={
-                "X_Pris": ImplicitActuatorCfg(
+                "X_Pris": DelayedPDActuatorCfg(
                     joint_names_expr=["X_Pris"],  # Corrected joint names
                     velocity_limit_sim=3.0,
                     # effort_limit_sim=3402823466385288598117041834845,
                     stiffness=300.0,
                     damping=10.0,
+                    min_delay = 0,
+                    max_delay = 3
                 ),
-                "Z_Pris_H": ImplicitActuatorCfg(
+                "Z_Pris_H": DelayedPDActuatorCfg(
                     joint_names_expr=["Z_Pris_H"],  # Corrected joint names
                     velocity_limit_sim=3.0,
                     # effort_limit_sim=3402823466385288598117041834845,
                     stiffness=30.0,
                     damping=20.0,
+                    min_delay = 0,
+                    max_delay = 3
                 ),
-                "Z_Pris_V": ImplicitActuatorCfg(
+                "Z_Pris_V": DelayedPDActuatorCfg(
                     joint_names_expr=["Z_Pris_V"],  # Corrected joint names
                     velocity_limit_sim=3.0,
                     # effort_limit_sim=3402823466385288598117041834845,
                     stiffness=5000.0,
                     damping=100.0,
+                    min_delay = 0,
+                    max_delay = 3
                 ),
-                "Racket_Pev": ImplicitActuatorCfg(
+                "Racket_Pev": DelayedPDActuatorCfg(
                     joint_names_expr=["Racket_Pev"],  # Corrected joint names
                     velocity_limit_sim=1145.0,  # Adjusted for the racket's movement
                     effort_limit_sim=314,
                     stiffness=10000000.0,
                     damping=0.0,
+                    min_delay = 0,
+                    max_delay = 3
                 ),
             },
     )

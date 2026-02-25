@@ -74,7 +74,7 @@ import gymnasium as gym  # noqa: E402
 from vecenv_wrapper import TennisRslRlVecEnvWrapper  # noqa: E402
 from modules.on_policy_runner_ballvel import OnPolicyRunnerBallVel  # noqa: E402
 from isaaclab_tasks.utils.hydra import hydra_task_config  # noqa: E402
-
+from isaaclab_rl.rsl_rl import export_policy_as_jit, export_policy_as_onnx
 
 def _get_clip_actions(agent_cfg) -> float:
     """Resolve clip_actions from CLI -> agent_cfg -> default."""
@@ -100,25 +100,73 @@ def main(env_cfg, agent_cfg):
     if args_cli.num_envs is not None:
         env_cfg.scene.num_envs = args_cli.num_envs
 
-    env = gym.make(args_cli.task, cfg=env_cfg)
+    # env = gym.make(args_cli.task, cfg=env_cfg)
 
-    clip_actions = _get_clip_actions(agent_cfg)
-    env = TennisRslRlVecEnvWrapper(env, clip_actions=clip_actions)
+    # clip_actions = _get_clip_actions(agent_cfg)
+    # env = TennisRslRlVecEnvWrapper(env, clip_actions=clip_actions)
 
-    runner = OnPolicyRunnerBallVel(env, agent_cfg.to_dict(), log_dir=None, device=args_cli.device)
-    runner.load(args_cli.checkpoint)
+    # runner = OnPolicyRunnerBallVel(env, agent_cfg.to_dict(), log_dir=None, device=args_cli.device)
+    # runner.load(args_cli.checkpoint)
 
-    obs, extras = env.get_observations()
-    obs = obs.to(args_cli.device)
-    critic_obs = extras.get("observations", {}).get("critic", obs).to(args_cli.device)
+    # obs, extras = env.get_observations()
+    # obs = obs.to(args_cli.device)
+    # critic_obs = extras.get("observations", {}).get("critic", obs).to(args_cli.device)
 
-    # ✅ use no_grad (safer than inference_mode with some pipelines)
-    with torch.no_grad():
-        while simulation_app.is_running():
-            actions = runner.alg.act(obs, critic_obs)
-            obs, rew, dones, infos = env.step(actions.to(env.device))
-            obs = obs.to(args_cli.device)
-            critic_obs = infos.get("observations", {}).get("critic", obs).to(args_cli.device)
+    # # ✅ use no_grad (safer than inference_mode with some pipelines)
+    # while simulation_app.is_running():
+    #     with torch.inference_mode():
+    #         actions = runner.alg.policy.act_inference(obs)
+    #         obs, rew, dones, infos = env.step(actions.to(env.device))
+    #         obs = obs.to(args_cli.device)
+    #         critic_obs = infos.get("observations", {}).get("critic", obs).to(args_cli.device)
+
+        # wrap around environment for rsl-rl
+    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    env = TennisRslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+
+    # load previously trained model
+    ppo_runner = OnPolicyRunnerBallVel(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+    ppo_runner.load(args_cli.checkpoint)
+
+    # obtain the trained policy for inference
+    policy = ppo_runner.get_inference_policy(device=env.unwrapped.device)
+
+    # extract the neural network module
+    # we do this in a try-except to maintain backwards compatibility.
+    try:
+        # version 2.3 onwards
+        policy_nn = ppo_runner.alg.policy
+    except AttributeError:
+        # version 2.2 and below
+        policy_nn = ppo_runner.alg.actor_critic
+
+    # export policy to onnx/jit
+    export_model_dir = os.path.join(os.path.dirname(args_cli.checkpoint), "exported")
+    export_policy_as_jit(policy_nn, ppo_runner.obs_normalizer, path=export_model_dir, filename="policy.pt")
+    export_policy_as_onnx(
+        policy_nn, normalizer=ppo_runner.obs_normalizer, path=export_model_dir, filename="policy.onnx"
+    )
+
+    dt = env.unwrapped.step_dt
+
+    # reset environment
+    obs, _ = env.get_observations()
+    timestep = 0
+    # simulate environment
+    while simulation_app.is_running():
+        # run everything in inference mode
+        with torch.inference_mode():
+            # agent stepping
+            actions = policy(obs)
+            # env stepping
+            obs, _, _, _ = env.step(actions)
+        if args_cli.video:
+            timestep += 1
+            # Exit the play loop after recording one video
+            if timestep == args_cli.video_length:
+                break
+
+    # close the simulator
 
     env.close()
 

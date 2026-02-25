@@ -64,9 +64,11 @@ class TennisRslRlOnPolicyRunnerCfg(RslRlOnPolicyRunnerCfg):
     device: str = "cuda:0"
     env_cfg: TennisrobotRlDirectEnvCfg = TennisrobotRlDirectEnvCfg()
     if env_cfg.use_ball_vel_estimator:
-     experiment_name = "tennisrobot_rl_with_ballvel_estimator"
+        experiment_name = "tennisrobot_rl_with_ballvel_estimator"
+        ball_vel_estimator: TennisBallVelEstimatorCfg = TennisBallVelEstimatorCfg()
     else:
-     experiment_name = "tennisrobot_rl_without_ballvel_estimator"
+        experiment_name = "tennisrobot_rl_without_ballvel_estimator"
+        ball_vel_estimator: None = None
     empirical_normalization = False
 
     num_steps_per_env: int = 24
@@ -76,4 +78,4 @@ class TennisRslRlOnPolicyRunnerCfg(RslRlOnPolicyRunnerCfg):
 
     algorithm: TennisRslRlPpoCfg = TennisRslRlPpoCfg()
     policy: TennisRslRlPolicyCfg = TennisRslRlPolicyCfg()
-    ball_vel_estimator: TennisBallVelEstimatorCfg = TennisBallVelEstimatorCfg()
+    

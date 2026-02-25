@@ -46,7 +46,6 @@ class OnPolicyRunnerBallVel(OnPolicyRunner):
 
         # normalize device
         self.device = torch.device(device) if isinstance(device, str) else device
-        print(f"[OnPolicyRunnerBallVel] device = {self.device}")
 
         self.env = env
         self.log_dir = log_dir

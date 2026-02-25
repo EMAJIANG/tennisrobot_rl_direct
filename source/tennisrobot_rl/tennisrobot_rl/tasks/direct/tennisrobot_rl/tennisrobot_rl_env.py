@@ -22,6 +22,7 @@ from isaaclab.sensors import ContactSensor
 from isaaclab.markers import VisualizationMarkers
 from isaaclab.utils.noise import uniform_noise
 from isaaclab.utils.noise import UniformNoiseCfg as Unoise
+# from .ball_event_logger import ServeHitLogger, ServeHitLoggerCfg
 from isaaclab.assets import (
     Articulation,
     ArticulationCfg,
@@ -69,6 +70,7 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
         self.own_bounce_count = torch.zeros(self.num_envs, device=self.device, dtype=torch.int32)
         self.two_bounce_own_court = torch.zeros(self.num_envs, device=self.device, dtype=torch.int32)
         self.x_algin_dist = torch.zeros(self.num_envs, device=self.device)
+        self.z_algin_dist = torch.zeros(self.num_envs, device=self.device)
         self.spatial_ball_to_racket = torch.zeros((self.num_envs, 3), device=self.device)
 
         if self.cfg.use_ball_vel_estimator:
@@ -90,13 +92,14 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
         self._court = RigidObject(self.cfg.court)
         self._ball  = RigidObject(self.cfg.ball)
         self._paddle_sensor = ContactSensor(self.cfg.contact_sensor)
-        self._hitting_point_visualizer = VisualizationMarkers(self.cfg.hitting_point_visualizer_cfg)
         self.env_camera = self.cfg.tiled_camera
         self.scene.sensors["paddle_sensor"] = self._paddle_sensor
         self.scene.articulations["robot"] = self._robot
         self.scene.rigid_objects["court"] = self._court
         self.scene.rigid_objects["ball"] = self._ball
-        self.hitting_point_visualizer = self._hitting_point_visualizer
+        if self.cfg.debug_visualization:
+            self._hitting_point_visualizer = VisualizationMarkers(self.cfg.hitting_point_visualizer_cfg)
+            self.hitting_point_visualizer = self._hitting_point_visualizer
 
         BASE_DIR = os.path.dirname(os.path.abspath(__file__))
         spawn_ground_plane(
@@ -113,6 +116,25 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
         # add lights
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
+
+        # 每个并行环境自己的 episode id（每次 reset 自增）
+        self.episode_id = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+
+        # New: one-row-per-serve logger
+        # base_logdir = getattr(self, "logdir", "logs")
+        # out_dir = os.path.join(base_logdir, "ball_events")
+
+        # self.serve_hit_logger = ServeHitLogger(
+        #     ServeHitLoggerCfg(
+        #         out_dir=out_dir,
+        #         filename="serve_hit_pairs.csv",
+        #         flush_every=2048,
+        #         fsync=False,
+        #     ),
+        #     device=self.device,
+        # )
+        # self.serve_hit_logger.attach_num_envs(self.num_envs)
+
     
     def _pre_physics_step(self, actions: torch.Tensor):
         self.actions = actions.clone()
@@ -157,6 +179,7 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
         )
 
         rew_x_align = torch.exp(-(4 * self.x_algin_dist) ** 2) * self.cfg.rew_scale_rew_x_align
+        rew_z_align = torch.exp(-(4 * self.z_algin_dist) ** 2) * self.cfg.rew_scale_rew_z_align
         # print(f"x_align_dist: {self.x_algin_dist[0].item():.4f}, rew_x_align: {rew_x_align[0].item():.4f}")
         # --- penalty 1: ball hit own court ---
         self.rew_court_fail = (
@@ -185,6 +208,7 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
             reward_contact
             + self.rew_court_success
             + rew_x_align
+            + rew_z_align
             - self.rew_court_fail
             - self.rew_ball_to_outside
             + reward_vel
@@ -231,6 +255,7 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
                 # main reward terms
                 "reward_contact": float(reward_contact[e0].item()),
                 "rew_x_align": float(rew_x_align[e0].item()),
+                "rew_z_align": float(rew_z_align[e0].item()),
                 "reward_vel": float(reward_vel[e0].item()),
                 "rew_court_success": float(self.rew_court_success[e0].item()),
                 "rew_ball_pos": float(rew_ball_pos[e0].item()),
@@ -271,6 +296,7 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
             "rew_court_fail": -self.rew_court_fail,
             "rew_ball_to_outside": -self.rew_ball_to_outside,
             "rew_x_align": rew_x_align,
+            "rew_z_align": rew_z_align,
 
             # regularizers (already weighted & dt-scaled; signs are + in total_reward but typically represent penalties)
             "rew_torque": rew_torque,
@@ -284,21 +310,8 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
         super()._reset_idx(env_ids)
-        # if 0 in env_ids and len(self.ball_pos_buf) != 0 and len(self.ball_linvel_buf) != 0:
-        # # 只写 env=0（与之前讨论一致）。如需全部 env，每步就直接 vstack 全部行即可。
-        #     import numpy as np
-        #     pos_seq = np.vstack([step_arr[0:1, :] for step_arr in self.ball_pos_buf])       # (T, 3)
-        #     vel_seq = np.vstack([step_arr[0:1, :] for step_arr in self.ball_linvel_buf])    # (T, 3)
+        # self.serve_hit_logger.finalize(env_ids)
 
-        #     # 每个 episode 单独一个文件，带表头，便于对齐与可视化
-        #     pos_path = os.path.join(self.logdir, f"ball_pos_ep{self.episode_count:06d}.csv")
-        #     vel_path = os.path.join(self.logdir, f"ball_linvel_ep{self.episode_count:06d}.csv")
-        #     np.savetxt(pos_path, pos_seq, delimiter=",", header="x,y,z", comments="")
-        #     np.savetxt(vel_path, vel_seq, delimiter=",", header="vx,vy,vz", comments="")
-
-        #     # 清空缓冲，进入下一集
-        #     self.ball_pos_buf.clear()
-        #     self.ball_linvel_buf.clear()
         # save plots
         if 0 in env_ids and len(self.current_obs) != 0 and len(self.current_rew) != 0:
             if self.episode_count % 500 == 0:
@@ -356,6 +369,23 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
         ball_state[:, 7:] = torch.cat((lin_vel, ang_vel), dim=1)
         self._ball.write_root_pose_to_sim(ball_state[:, :7], env_ids)
         self._ball.write_root_velocity_to_sim(ball_state[:, 7:], env_ids)
+        # episode id increment ONCE per serve
+        self.episode_id[env_ids] += 1
+        global_step = int(getattr(self, "common_step_counter", -1))
+
+        # ENV-LOCAL serve pos MUST be (pos_w - origin)
+        origins = self.scene.env_origins[env_ids]
+        serve_pos_local = ball_state[:, 0:3] - origins          # (M,3) local
+        serve_vel_local = ball_state[:, 7:10]                   # (M,3) vel unaffected by translation
+
+        # self.serve_hit_logger.start_serve(
+        #     env_ids=env_ids,
+        #     episode_ids=self.episode_id[env_ids],
+        #     serve_pos_local=serve_pos_local,
+        #     serve_vel_local=serve_vel_local,
+        #     global_step=global_step,
+        # )
+
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         # joint_pos = torch.zeros((1, self._robot.num_joints), device=self.device)
         joint_vel = torch.zeros_like(joint_pos)
@@ -388,6 +418,7 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
 
         self._compute_intermediate_values()
         self.x_algin_dist[env_ids] = torch.abs(self.ball_pos[env_ids, 0] - (joint_pos[:,1] + self.scene.env_origins[env_ids][:,0]))
+        self.z_algin_dist[env_ids] = torch.abs(self.ball_pos[env_ids, 2] - (joint_pos[:,3] + self.scene.env_origins[env_ids][:,2]))
 
     def paddle_contact(self) -> torch.Tensor:
         # extract the used quantities (to enable type-hinting)
@@ -419,7 +450,8 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
         rotated_offset: torch.Tensor = quat_apply(paddle_quat, local_offset)
         # 4) Compute your touch point:
         self.paddle_touch_point = paddle_pos + rotated_offset
-        self.hitting_point_visualizer.visualize(self.paddle_touch_point)
+        if self.cfg.debug_visualization:
+            self.hitting_point_visualizer.visualize(self.paddle_touch_point)
 
     def _compute_intermediate_values(self):
         # For ball: extract global pose and then compute local pose using scene.env_origins
@@ -437,11 +469,34 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
         self.get_paddle_touch_point()
         self.spatial_ball_to_racket = self.ball_global_pos - self.paddle_touch_point
         self.x_algin_dist = torch.abs(self.ball_global_pos[:, 0] - self.paddle_touch_point[:, 0])
+        self.z_algin_dist = torch.abs(self.ball_global_pos[:, 2] - self.paddle_touch_point[:, 2])
         distance = torch.norm(self.ball_global_pos - self.paddle_touch_point, dim=1).clamp_min(1e-12)
         # print(f"distance: {distance} ball_pos: {self.ball_global_pos} paddle_pos: {self.paddle_touch_point}")
         contact_score = self.paddle_contact().to(torch.float32)
         self.ball_contact = contact_score
         self.ball_contact = self.ball_contact * ~self.has_touch_paddle
+        
+        # -----------------------------
+        # Hit logging (first contact) - ENV-LOCAL
+        # -----------------------------
+        # hit_env_ids = torch.nonzero(self.ball_contact > 0.0, as_tuple=False).squeeze(-1)
+        # if hit_env_ids.numel() > 0:
+        #     t_hit = self.episode_length_buf[hit_env_ids].to(torch.long)
+
+        #     # ball_pos is already ENV-LOCAL (root_pos_w - env_origins)
+        #     hit_pos_local = self.ball_pos[hit_env_ids]
+
+        #     # paddle touch point convert to ENV-LOCAL
+        #     paddle_pos_local = self.paddle_touch_point[hit_env_ids] - self.scene.env_origins[hit_env_ids]
+
+        #     self.serve_hit_logger.mark_hit(
+        #         env_ids=hit_env_ids,
+        #         t_hit=t_hit,
+        #         hit_pos_local=hit_pos_local,
+        #         paddle_pos_local=paddle_pos_local,
+        #     )
+
+
         new_hits = contact_score > 0  # Tensor[N] bool
         still_false = ~self.has_touch_paddle  # Tensor[N] bool
         self.has_touch_paddle[still_false] = new_hits[still_false]
@@ -521,7 +576,7 @@ class TennisrobotRlDirectEnv(DirectRLEnv):
              policy_joint_pos,
              policy_joint_vel, 
              policy_ball_pos, 
-             self.ball_linvel
+             policy_ball_lin_vel
              ),
             dim=-1,
         )
